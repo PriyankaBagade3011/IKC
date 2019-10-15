@@ -1,3 +1,11 @@
+# TODO
+# 1. degrad 고정 후 학습
+# 2. sftmd 구조 변경 후 학습 
+# 2 - 1. additional term 제거
+# 2 - 2. sft-residual 개수 줄이기
+# 3. # of param 확인
+# 4. predictor 출력 범위 제한
+
 import PinkBlack.io
 from PinkBlack.trainer import Trainer
 
@@ -36,8 +44,8 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     resume=False,
     seed=940513,
     scale=3,
-    use_flickr=False,
     mode="SFTMD",
+    use_flickr=False,
     use_set5=False,
     use_urban100=False,
     ))
@@ -51,6 +59,9 @@ train_imgs = glob.glob(args.train + "/**/*.png", recursive=True)
 test_imgs = glob.glob(args.test + "/**/*.png", recursive=True)
 
 train_imgs, valid_imgs = train_test_split(train_imgs, test_size=0.2, random_state=args.seed)
+
+# TODO 여러 degradation일때 지우기
+args.test_kernel = args.train_kernel
 
 if args.use_flickr:
     flikr2k = glob.glob("../data/Flickr2K/Flickr2K_HR/*.png")
@@ -118,8 +129,9 @@ if args.mode == "SFTMD":
 elif args.mode == "PREDICTOR":
     def criterion(output, bd):
         k_estimated = output
-        k_reduced = bd['k_reduced']
-        return loss(k_estimated, k_reduced)
+        k_gt = bd['k'].view(bd['k'].shape[0], -1)
+        # k_reduced = bd['k']
+        return loss(k_estimated, k_gt)
 else:
     raise NotImplementedError
 
@@ -201,7 +213,7 @@ if args.mode == "SFTMD":
     trainer.train(step=args.num_step, validation_interval=args.validation_interval)
 
 elif args.mode == "PREDICTOR":
-    predictor = Predictor().cuda()
+    predictor = Predictor(train_dataset.pca).cuda()
     optimizer = optim.Adam(filter(lambda x: x.requires_grad, predictor.parameters()), lr=args.lr)
 
     if 0 < args.lr_decay < 1:
