@@ -43,8 +43,6 @@ class Predictor(nn.Module):
         return recon
 
 
-
-
 class Corrector(nn.Module):
     def __init__(self, in_nc=3, nf=64, code_len=10, use_bias=True):
         super(Corrector, self).__init__()
@@ -108,15 +106,15 @@ class SFT_Layer(nn.Module):
         self.mul_leaky = nn.LeakyReLU(0.2)
         self.mul_conv2 = nn.Conv2d(32, nf, kernel_size=3, stride=1, padding=1)
 
-        # self.add_conv1 = nn.Conv2d(para + nf, 32, kernel_size=3, stride=1, padding=1)
-        # self.add_leaky = nn.LeakyReLU(0.2)
-        # self.add_conv2 = nn.Conv2d(32, nf, kernel_size=3, stride=1, padding=1)
+        self.add_conv1 = nn.Conv2d(para + nf, 32, kernel_size=3, stride=1, padding=1)
+        self.add_leaky = nn.LeakyReLU(0.2)
+        self.add_conv2 = nn.Conv2d(32, nf, kernel_size=3, stride=1, padding=1)
 
     def forward(self, feature_maps, para_maps):
         cat_input = torch.cat((feature_maps, para_maps), dim=1)
         mul = torch.sigmoid(self.mul_conv2(self.mul_leaky(self.mul_conv1(cat_input))))
-        # add = self.add_conv2(self.add_leaky(self.add_conv1(cat_input)))
-        return feature_maps * mul # + add
+        add = self.add_conv2(self.add_leaky(self.add_conv1(cat_input)))
+        return feature_maps * mul + add
 
 
 class SFT_Residual_Block(nn.Module):
@@ -147,11 +145,6 @@ class SFTMD(nn.Module):
         self.relu_conv2 = nn.LeakyReLU(0.2)
         self.conv3 = nn.Conv2d(64, 64, 3, stride=1, padding=1)
 
-        sft_branch = []
-        for i in range(nb):
-            sft_branch.append(SFT_Residual_Block())
-        self.sft_branch = nn.Sequential(*sft_branch)
-
         for i in range(nb):
             self.add_module('SFT-residual' + str(i + 1), SFT_Residual_Block(nf=nf, para=input_para))
 
@@ -175,11 +168,6 @@ class SFTMD(nn.Module):
             )
 
         self.conv_output = nn.Conv2d(in_channels=64, out_channels=out_nc, kernel_size=9, stride=1, padding=4, bias=True)
-        
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                init.kaiming_uniform_(m.weight)
-                m.bias.data.fill_(0)
 
     def forward(self, input_dict):
         input = input_dict['LR']
@@ -194,11 +182,9 @@ class SFTMD(nn.Module):
         for i in range(self.num_blocks):
             fea_in = self.__getattr__('SFT-residual' + str(i + 1))(fea_in, ker_code_exp)
         fea_mid = fea_in
-        #fea_in = self.sft_branch((fea_in, ker_code_exp))
         fea_add = torch.add(fea_mid, fea_bef)
         fea = self.upscale(self.conv_mid(self.sft(fea_add, ker_code_exp)))
         out = self.conv_output(fea)
         
-        # print("minmax", out.min(), out.max())
-        return out
-        # return torch.clamp(out, min=self.min, max=self.max)
+        # return out
+        return torch.clamp(out, min=self.min, max=self.max)

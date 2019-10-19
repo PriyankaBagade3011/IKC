@@ -1,8 +1,9 @@
 # TODO
-# 1. degrad 고정 후 학습
 # 2. sftmd 구조 변경 후 학습 
 # 2 - 1. additional term 제거
 # 2 - 2. sft-residual 개수 줄이기
+
+# 1. degrad 고정 후 학습
 # 3. # of param 확인
 # 4. predictor 출력 범위 제한
 
@@ -36,18 +37,21 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     test_kernel="/",
     num_step=10000,
     validation_interval=500,
-    num_workers=8,
+    num_workers=4,
     lr=0.01,
     lr_decay=0.5,
-    loss="l1",
-    metric="l1",  # TODO : ssim 등 추가하기
+    lr_min=1e-7,
+    lr_scheduler="cosine", # 또는 'plateau' 또는 'no'
+    loss="l2",
+    metric="psnr",
     resume=False,
     seed=940513,
-    scale=3,
+    scale=2,
     mode="SFTMD",
     use_flickr=False,
     use_set5=False,
     use_urban100=False,
+    
     ))
 
 PinkBlack.io.set_seeds(args.seed)
@@ -58,10 +62,10 @@ PinkBlack.io.set_seeds(args.seed)
 train_imgs = glob.glob(args.train + "/**/*.png", recursive=True)
 test_imgs = glob.glob(args.test + "/**/*.png", recursive=True)
 
-train_imgs, valid_imgs = train_test_split(train_imgs, test_size=0.2, random_state=args.seed)
+train_imgs, valid_imgs = train_test_split(train_imgs, test_size=0.1, random_state=args.seed)
 
-# TODO 여러 degradation일때 지우기
-args.test_kernel = args.train_kernel
+# # TODO 여러 degradation일때 지우기
+# args.test_kernel = args.train_kernel
 
 if args.use_flickr:
     flikr2k = glob.glob("../data/Flickr2K/Flickr2K_HR/*.png")
@@ -157,27 +161,45 @@ else:
 # ------------------------------------------------------------- 
 
 if args.mode == "SFTMD":
-    sftmd = SFTMD(input_para=10, scale=args.scale).cuda()
-    optimizer = optim.Adam(filter(lambda x: x.requires_grad, sftmd.parameters()), lr=args.lr)
+    net = SFTMD(input_para=10, scale=args.scale).cuda()
+elif args.mode == "PREDICTOR":
+    net = Predictor(train_dataset.pca).cuda()
+else:
+    raise ValueError(f"network ?? {args.mode}")
 
-    if 0 < args.lr_decay < 1:
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=5, factor=args.lr_decay)
-    else:
-        scheduler = None
+optimizer = optim.Adam(filter(lambda x: x.requires_grad, net.parameters()), lr=args.lr)
 
-    trainer = Trainer(sftmd, 
-                    criterion=criterion, 
-                    metric=metric, 
-                    train_dataloader=train_dl, 
-                    val_dataloader=valid_dl, 
-                    test_dataloader=test_dl, 
-                    optimizer=optimizer, 
-                    lr_scheduler=scheduler,
-                    ckpt=args.ckpt, 
-                    is_data_dict=True,
-                    clip_gradient_norm=3.
-                    )
+if args.lr_scheduler == "cosine":
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=40, eta_min=args.lr_min) # 2만번에 한 번 restart
+elif args.lr_scheduler == "plateau":
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=5, factor=args.lr_decay)
+elif args.lr_scheduler == "no":
+    scheduler = None
+else:
+    raise ValueError(f"unknown lr_scheduler :: {args.lr_scheduler}")
 
+trainer = Trainer(net, 
+                criterion=criterion, 
+                metric=metric, 
+                train_dataloader=train_dl, 
+                val_dataloader=valid_dl, 
+                test_dataloader=test_dl, 
+                optimizer=optimizer, 
+                lr_scheduler=scheduler,
+                ckpt=args.ckpt, 
+                is_data_dict=True,
+                clip_gradient_norm=3.,
+                logdir=args.ckpt+"_tb/",
+                experiment_name=os.path.splitext(os.path.basename(args.ckpt))[0]
+                )
+
+if args.use_set5: 
+    trainer.dataloader['set5'] = set5_dl
+                                    
+if args.use_urban100:
+    trainer.dataloader['urban100'] = urban100_dl
+    
+if args.mode == "SFTMD":
     os.makedirs(args.ckpt + "_result_imgs/", exist_ok=True)
     def validation_callback():
         # To save result image - LR(nearest), SR, HR(GT)
@@ -186,7 +208,7 @@ if args.mode == "SFTMD":
             for k,v in bd.items():
                 bd[k] = v.cuda()    
             
-            sr = sftmd(bd)
+            sr = net(bd)
             hr = bd['HR']
             lr = bd['LR']
 
@@ -202,42 +224,8 @@ if args.mode == "SFTMD":
 
     trainer.register_callback(validation_callback)
 
-    if args.use_set5:
-        trainer.dataloader['set5'] = set5_dl
-                                      
-    if args.use_urban100:
-        trainer.dataloader['urban100'] = urban100_dl
 
-    print("trainer is ready.")
+print("trainer is ready.")
 
-    trainer.train(step=args.num_step, validation_interval=args.validation_interval)
-
-elif args.mode == "PREDICTOR":
-    predictor = Predictor(train_dataset.pca).cuda()
-    optimizer = optim.Adam(filter(lambda x: x.requires_grad, predictor.parameters()), lr=args.lr)
-
-    if 0 < args.lr_decay < 1:
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=5, factor=args.lr_decay)
-    else:
-        scheduler = None
-
-    p_trainer = Trainer(predictor, 
-                        criterion=criterion,
-                        metric=metric, 
-                        train_dataloader=train_dl, 
-                        val_dataloader=valid_dl, 
-                        test_dataloader=test_dl, 
-                        optimizer=optimizer, 
-                        lr_scheduler=scheduler,
-                        ckpt=args.ckpt, 
-                        is_data_dict=True,
-                        clip_gradient_norm=3.
-                        )
-    if args.use_set5:
-        p_trainer.dataloader['set5'] = set5_dl
-    print("p_trainer is ready.")
-    p_trainer.train(step=args.num_step, validation_interval=args.validation_interval)
-
-else:
-    raise NotImplementedError
+trainer.train(step=args.num_step, validation_interval=args.validation_interval)
 
