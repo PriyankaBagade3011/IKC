@@ -20,12 +20,10 @@ from torchvision.utils import make_grid
 import os, glob
 import numpy as np
 from PIL import Image
-from sklearn.model_selection import train_test_split
 import cv2
 
-from dataset.kernel_image_pair import KernelImagePair, default_augmentations, default_transforms
 from network.sftmd import SFTMD, Predictor, Corrector
-from common import tensor2img
+from common import tensor2img, get_datasets
 
 args = PinkBlack.io.setup(trace=False, default_args=dict(
     ckpt="ckpt/sftmd/sftmd.pth",
@@ -51,68 +49,27 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     use_flickr=False,
     use_set5=False,
     use_urban100=False,
-    
+    nf=64,
+    patch_size=144,
     ))
 
 PinkBlack.io.set_seeds(args.seed)
 
 # --------------------------------------------------------- 
-# Prepare training/validation/test data
+# Prepare training/validation/test data, and its dataloaders
 
-train_imgs = glob.glob(args.train + "/**/*.png", recursive=True)
-test_imgs = glob.glob(args.test + "/**/*.png", recursive=True)
-
-train_imgs, valid_imgs = train_test_split(train_imgs, test_size=0.1, random_state=args.seed)
-
-# # TODO 여러 degradation일때 지우기
-# args.test_kernel = args.train_kernel
-
-if args.use_flickr:
-    flikr2k = glob.glob("../data/Flickr2K/Flickr2K_HR/*.png")
-    train_imgs.extend(flikr2k)
-
-print(f"num of train {len(train_imgs)},  num of valid {len(valid_imgs)}.")
-print(f"num of test {len(test_imgs)}.")
-
-train_dataset = KernelImagePair(imgs=train_imgs, 
-                                kernel_pickle=args.train_kernel, scale=args.scale, 
-                                augmentations=default_augmentations, transforms=default_transforms, 
-                                seed=args.seed, train=True)
-
-valid_dataset = KernelImagePair(imgs=valid_imgs, 
-                                kernel_pickle=args.train_kernel, scale=args.scale, 
-                                augmentations=default_augmentations, transforms=default_transforms, 
-                                seed=args.seed, train=True)
-# TODO :: validation을 patch로 할지 full size image로 할지
-
-test_dataset = KernelImagePair(imgs=test_imgs, 
-                            kernel_pickle=args.test_kernel, scale=args.scale, 
-                            augmentations=default_augmentations, transforms=default_transforms, 
-                            seed=args.seed, train=False)
-if args.use_set5:
-    set5 = glob.glob("../data/testing_datasets/Set5/*.png")
-    set5_dataset = KernelImagePair(imgs=set5,
-                                kernel_pickle=args.test_kernel, scale=args.scale, 
-                                augmentations=default_augmentations, transforms=default_transforms, 
-                                seed=args.seed, train=False)
-    set5_dl = DataLoader(set5_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=False)
-    print(f"Set5 testset is available (num {len(set5)})")
-
-    
-if args.use_urban100:
-    urban100 = glob.glob("../data/testing_datasets/Urban100/*.png")
-    urban100_dataset = KernelImagePair(imgs=urban100,
-                                kernel_pickle=args.test_kernel, scale=args.scale, 
-                                augmentations=default_augmentations, transforms=default_transforms, 
-                                seed=args.seed, train=False)
-    urban100_dl = DataLoader(urban100_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=False)
-    print(f"Urban100 testset is available (num {len(urban100_dataset)})")
-    
+datasets = get_datasets(args)
 print(f"datasets are prepared.")
 
-train_dl = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
-valid_dl = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
-test_dl = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=False)
+train_dl = DataLoader(datasets['train_dataset'], batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
+valid_dl = DataLoader(datasets['valid_dataset'], batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True)
+test_dl = DataLoader(datasets['test_dataset'], batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=False)
+
+if args.use_set5:
+    set5_dl = DataLoader(datasets['set5_dataset'], batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=False)
+
+if args.use_urban100:
+    urban100_dl = DataLoader(datasets['urban100_dataset'], batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=False)
 
 # ------------------------------------------------------
 # Define loss and metrics
@@ -161,9 +118,9 @@ else:
 # ------------------------------------------------------------- 
 
 if args.mode == "SFTMD":
-    net = SFTMD(input_para=10, scale=args.scale).cuda()
+    net = SFTMD(input_para=10, scale=args.scale, nf=args.nf).cuda()
 elif args.mode == "PREDICTOR":
-    net = Predictor(train_dataset.pca).cuda()
+    net = Predictor(datasets['train_dataset'].pca).cuda()
 else:
     raise ValueError(f"network ?? {args.mode}")
 
@@ -173,6 +130,8 @@ if args.lr_scheduler == "cosine":
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=40, eta_min=args.lr_min) # 2만번에 한 번 restart
 elif args.lr_scheduler == "plateau":
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=5, factor=args.lr_decay)
+elif args.lr_scheduler == "multi":
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, [(x+1) * 50000 // args.validation_interval for x in range(10)], gamma=args.lr_decay)
 elif args.lr_scheduler == "no":
     scheduler = None
 else:
@@ -188,7 +147,7 @@ trainer = Trainer(net,
                 lr_scheduler=scheduler,
                 ckpt=args.ckpt, 
                 is_data_dict=True,
-                clip_gradient_norm=3.,
+                # clip_gradient_norm=3.,
                 logdir=args.ckpt+"_tb/",
                 experiment_name=os.path.splitext(os.path.basename(args.ckpt))[0]
                 )
@@ -209,6 +168,7 @@ if args.mode == "SFTMD":
                 bd[k] = v.cuda()    
             
             sr = net(bd)
+
             hr = bd['HR']
             lr = bd['LR']
 
@@ -216,14 +176,20 @@ if args.mode == "SFTMD":
             img = tensor2img(cat.detach())
             
             lr_img = tensor2img(lr.detach())
-            lr_img = cv2.resize(lr_img, (144, args.batch_size * 144), interpolation=cv2.INTER_NEAREST)
+            lr_img = cv2.resize(lr_img, (args.patch_size, args.batch_size * 144), interpolation=cv2.INTER_NEAREST)
 
             img = np.concatenate((lr_img, img), axis=1)
             
             Image.fromarray(img).save(trainer.ckpt + f"_result_imgs/{trainer.config['step']:08d}.png")
-
     trainer.register_callback(validation_callback)
+    
+elif args.mode == "PREDICTOR":
+    pass
 
+    
+
+if args.resume:
+    trainer.load(args.ckpt)
 
 print("trainer is ready.")
 

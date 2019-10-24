@@ -1,6 +1,10 @@
 import numpy as np
 import math
 from torchvision.utils import make_grid
+import os, glob
+from sklearn.model_selection import train_test_split
+from dataset.kernel_image_pair import KernelImagePair, default_augmentations, default_transforms
+
 def tensor2img(tensor, out_type=np.uint8, min_max=(0, 1)):
     '''
     Converts a torch Tensor into an image Numpy array
@@ -26,3 +30,65 @@ def tensor2img(tensor, out_type=np.uint8, min_max=(0, 1)):
         img_np = (img_np * 255.0).round()
         # Important. Unlike matlab, numpy.unit8() WILL NOT round by default.
     return img_np.astype(out_type)
+
+def get_datasets(args):
+    train_imgs = glob.glob(args.train + "/**/*.png", recursive=True)
+    test_imgs = glob.glob(args.test + "/**/*.png", recursive=True)
+
+    train_imgs, valid_imgs = train_test_split(train_imgs, test_size=0.1, random_state=args.seed)
+
+    # # TODO 여러 degradation일때 지우기
+    # args.test_kernel = args.train_kernel
+
+    if args.use_flickr:
+        flikr2k = glob.glob("../data/Flickr2K/Flickr2K_HR/*.png")
+        train_imgs.extend(flikr2k)
+
+    print(f"num of train {len(train_imgs)},  num of valid {len(valid_imgs)}.")
+    print(f"num of test {len(test_imgs)}.")
+
+    train_dataset = KernelImagePair(imgs=train_imgs, 
+                                    kernel_pickle=args.train_kernel, scale=args.scale, 
+                                    augmentations=default_augmentations, transforms=default_transforms, 
+                                    patch_size=(args.patch_size, args.patch_size),
+                                    seed=args.seed, train=True)
+
+    valid_dataset = KernelImagePair(imgs=valid_imgs, 
+                                    kernel_pickle=args.train_kernel, scale=args.scale, 
+                                    augmentations=default_augmentations, transforms=default_transforms, 
+                                    patch_size=(args.patch_size, args.patch_size),
+                                    seed=args.seed, train=True)
+
+    test_dataset = KernelImagePair(imgs=test_imgs, 
+                                kernel_pickle=args.test_kernel, scale=args.scale, 
+                                augmentations=default_augmentations, transforms=default_transforms, 
+                                seed=args.seed, train=False)
+    if args.use_set5:
+        set5 = glob.glob("../data/testing_datasets/Set5/*.png")
+        set5_dataset = KernelImagePair(imgs=set5,
+                                    kernel_pickle=args.test_kernel, scale=args.scale, 
+                                    augmentations=default_augmentations, transforms=default_transforms, 
+                                    seed=args.seed, train=False)
+        print(f"Set5 testset is available (num {len(set5)})")
+    else:
+        set5_dataset = None
+
+    if args.use_urban100:
+        urban100 = glob.glob("../data/testing_datasets/Urban100/*.png")
+        urban100_dataset = KernelImagePair(imgs=urban100,
+                                    kernel_pickle=args.test_kernel, scale=args.scale, 
+                                    augmentations=default_augmentations, transforms=default_transforms, 
+                                    seed=args.seed, train=False)
+        print(f"Urban100 testset is available (num {len(urban100_dataset)})")
+    else:
+        urban100_dataset = None
+
+    rt_dict = dict(
+        train_dataset=train_dataset,
+        valid_dataset=valid_dataset,
+        test_dataset=test_dataset,
+        set5_dataset=set5_dataset,
+        urban100_dataset=urban100_dataset
+    )
+    
+    return rt_dict

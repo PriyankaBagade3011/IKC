@@ -17,31 +17,51 @@ class Predictor(nn.Module):
         self.code_len = code_len
         self.kernel_size = kernel_size
 
+        # self.ConvNet = nn.Sequential(*[
+        #     nn.Conv2d(in_nc, nf, kernel_size=5, stride=1, padding=2),
+        #     nn.LeakyReLU(0.2, True),
+        #     nn.Conv2d(nf, nf, kernel_size=5, stride=1, padding=2, bias=use_bias),
+        #     nn.BatchNorm2d(nf),
+        #     nn.Conv2d(nf, nf, kernel_size=5, stride=2, padding=2, bias=use_bias),
+        #     nn.LeakyReLU(0.2, True),
+        #     nn.Conv2d(nf, nf, kernel_size=5, stride=1, padding=2, bias=use_bias),
+        #     nn.BatchNorm2d(nf),
+        #     nn.Conv2d(nf, code_len, kernel_size=5, stride=1, padding=2, bias=use_bias),
+        # ])
+
         self.ConvNet = nn.Sequential(*[
             nn.Conv2d(in_nc, nf, kernel_size=5, stride=1, padding=2),
             nn.LeakyReLU(0.2, True),
             nn.Conv2d(nf, nf, kernel_size=5, stride=1, padding=2, bias=use_bias),
-            nn.BatchNorm2d(nf),
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(nf, nf, kernel_size=5, stride=1, padding=2, bias=use_bias),
+            nn.LeakyReLU(0.2, True),
             nn.Conv2d(nf, nf, kernel_size=5, stride=2, padding=2, bias=use_bias),
             nn.LeakyReLU(0.2, True),
             nn.Conv2d(nf, nf, kernel_size=5, stride=1, padding=2, bias=use_bias),
-            nn.BatchNorm2d(nf),
+            nn.LeakyReLU(0.2, True),
             nn.Conv2d(nf, code_len, kernel_size=5, stride=1, padding=2, bias=use_bias),
+            nn.LeakyReLU(0.2, True),
         ])
 
         self.globalPooling = nn.AdaptiveAvgPool2d((1,1))
 
-    def forward(self, bd):
+    def forward(self, bd, recon_kernel=True):
         input = bd['LR']
         conv = self.ConvNet(input)
         flat = self.globalPooling(conv)
         flat = flat.view(flat.size()[:2]) # torch size: [B, code_len]
-
+        
         batch_mean = self.mean_.expand(flat.shape[0], self.kernel_size*self.kernel_size)
         recon = torch.matmul(flat, self.components_) + batch_mean
         recon = F.softmax(recon, dim=-1)
-        return recon
-
+        if recon_kernel:
+            return recon
+        else:
+            recon = recon - batch_mean
+            code = torch.matmul(recon, self.components_.t())
+            return code
+        
 
 class Corrector(nn.Module):
     def __init__(self, in_nc=3, nf=64, code_len=10, use_bias=True):
@@ -81,8 +101,12 @@ class Corrector(nn.Module):
 
         self.nf = nf
         self.globalPooling = nn.AdaptiveAvgPool2d([1, 1])
+        self.res = True
 
-    def forward(self, input, code, res=False):
+    def forward(self, bd):
+        input = bd['SR']
+        code = bd['k_reduced']
+
         conv_input = self.ConvNet(input)
         B, C_f, H_f, W_f = conv_input.size() # LR_size
 
@@ -94,7 +118,7 @@ class Corrector(nn.Module):
         flat = self.globalPooling(code_res)
         Delta_h_p = flat.view(flat.size()[:2])
 
-        if res:
+        if self.res:
             return Delta_h_p
         else:
             return Delta_h_p + code
@@ -122,8 +146,8 @@ class SFT_Residual_Block(nn.Module):
         super(SFT_Residual_Block, self).__init__()
         self.sft1 = SFT_Layer(nf=nf, para=para)
         self.sft2 = SFT_Layer(nf=nf, para=para)
-        self.conv1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1, bias=True)
-        self.conv2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1, bias=True)
+        self.conv1 = nn.Conv2d(in_channels=nf, out_channels=nf, kernel_size=3, stride=1, padding=1, bias=True)
+        self.conv2 = nn.Conv2d(in_channels=nf, out_channels=nf, kernel_size=3, stride=1, padding=1, bias=True)
 
     def forward(self, feature_maps, para_maps):
         fea1 = F.relu(self.sft1(feature_maps, para_maps))
@@ -139,35 +163,41 @@ class SFTMD(nn.Module):
         self.para = input_para
         self.num_blocks = nb
 
-        self.conv1 = nn.Conv2d(in_nc, 64, 3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(in_nc, nf, 3, stride=1, padding=1)
         self.relu_conv1 = nn.LeakyReLU(0.2)
-        self.conv2 = nn.Conv2d(64, 64, 3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(nf, nf, 3, stride=1, padding=1)
         self.relu_conv2 = nn.LeakyReLU(0.2)
-        self.conv3 = nn.Conv2d(64, 64, 3, stride=1, padding=1)
+        self.conv3 = nn.Conv2d(nf, nf, 3, stride=1, padding=1)
 
         for i in range(nb):
             self.add_module('SFT-residual' + str(i + 1), SFT_Residual_Block(nf=nf, para=input_para))
 
-        self.sft = SFT_Layer(nf=64, para=input_para)
-        self.conv_mid = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1, bias=True)
+        self.sft = SFT_Layer(nf=nf, para=input_para)
+        self.conv_mid = nn.Conv2d(in_channels=nf, out_channels=nf, kernel_size=3, stride=1, padding=1, bias=True)
 
         if scale == 4: #x4
             self.upscale = nn.Sequential(
-                nn.Conv2d(in_channels=64, out_channels=64 * scale, kernel_size=3, stride=1, padding=1, bias=True),
+                nn.Conv2d(in_channels=nf, out_channels=nf * scale, kernel_size=3, stride=1, padding=1, bias=True),
                 nn.PixelShuffle(scale // 2),
                 nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(in_channels=64, out_channels=64 * scale, kernel_size=3, stride=1, padding=1, bias=True),
+                nn.Conv2d(in_channels=nf, out_channels=nf * scale, kernel_size=3, stride=1, padding=1, bias=True),
                 nn.PixelShuffle(scale // 2),
                 nn.LeakyReLU(0.2, inplace=True),
             )
         else: #x2, x3
             self.upscale = nn.Sequential(
-            nn.Conv2d(in_channels=64, out_channels=64*scale**2, kernel_size=3, stride=1, padding=1, bias=True),
+            nn.Conv2d(in_channels=nf, out_channels=nf*scale**2, kernel_size=3, stride=1, padding=1, bias=True),
             nn.PixelShuffle(scale),
             nn.LeakyReLU(0.2, inplace=True),
             )
 
-        self.conv_output = nn.Conv2d(in_channels=64, out_channels=out_nc, kernel_size=9, stride=1, padding=4, bias=True)
+        self.conv_output = nn.Conv2d(in_channels=nf, out_channels=out_nc, kernel_size=9, stride=1, padding=4, bias=True)
+
+        # for m in self.modules():
+        #     if isinstance(m, nn.Conv2d):
+        #         init.kaiming_uniform_(m.weight)
+        #         m.bias.data.fill_(0)
+
 
     def forward(self, input_dict):
         input = input_dict['LR']
@@ -186,5 +216,5 @@ class SFTMD(nn.Module):
         fea = self.upscale(self.conv_mid(self.sft(fea_add, ker_code_exp)))
         out = self.conv_output(fea)
         
-        # return out
-        return torch.clamp(out, min=self.min, max=self.max)
+        return out
+        # return torch.clamp(out, min=self.min, max=self.max)
