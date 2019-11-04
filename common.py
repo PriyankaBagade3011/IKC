@@ -51,10 +51,10 @@ def get_datasets(args):
                                     kernel_pickle=args.train_kernel, scale=args.scale, 
                                     augmentations=default_augmentations, transforms=default_transforms, 
                                     patch_size=(args.patch_size, args.patch_size),
-                                    seed=args.seed, train=True)
+                                    seed=args.seed, train=True, noise=args.use_noise)
 
     valid_dataset = KernelImagePair(imgs=valid_imgs, 
-                                    kernel_pickle=args.train_kernel, scale=args.scale, 
+                                    kernel_pickle=args.test_kernel, scale=args.scale, 
                                     augmentations=default_augmentations, transforms=default_transforms, 
                                     patch_size=(args.patch_size, args.patch_size),
                                     seed=args.seed, train=True)

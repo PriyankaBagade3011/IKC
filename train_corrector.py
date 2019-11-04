@@ -18,6 +18,7 @@ from sklearn.decomposition import KernelPCA, PCA
 from dataset.kernel_image_pair import KernelImagePair, default_augmentations, default_transforms
 from network.sftmd import SFTMD, Predictor, Corrector
 from common import tensor2img, get_datasets
+from radam import RAdam
 
 args = PinkBlack.io.setup(trace=False, default_args=dict(
     sftmd="ckpt/sftmd/sftmd.pth",
@@ -37,6 +38,7 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     lr_decay=0.5,
     lr_min=1e-7,
     lr_scheduler="no", # 또는 'plateau' 또는 'no'
+    optimizer='adam',
     loss="l2",
     metric="psnr",
     resume=False,
@@ -46,6 +48,7 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     use_set5=False,
     use_urban100=False,
     patch_size=144,
+    use_noise=False,
     ))
 PinkBlack.io.set_seeds(args.seed)
 
@@ -112,8 +115,15 @@ predictor.eval()
 
 corrector = Corrector(nf=args.nf).cuda()
 
-optimizer = optim.Adam(filter(lambda x: x.requires_grad, corrector.parameters()), lr=args.lr)
+if args.optimizer == "radam":
+    optimizer = RAdam(filter(lambda x: x.requires_grad, corrector.parameters()), lr=args.lr)
+else:
+    optimizer = optim.Adam(filter(lambda x: x.requires_grad, corrector.parameters()), lr=args.lr)
 
+if args.lr_scheduler == "multi":
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, [(x+1) * 30000 // args.validation_interval for x in range(10)], gamma=args.lr_decay)
+else:
+    scheduler = None
 # trainer template code가 없어서 그냥 직접 짜야겠다..
 
 trainer = Trainer(
@@ -124,7 +134,7 @@ trainer = Trainer(
     val_dataloader=valid_dl,
     test_dataloader=test_dl,
     optimizer=optimizer,
-    lr_scheduler=None,
+    lr_scheduler=scheduler,
     ckpt=args.ckpt, 
     is_data_dict=True,
     logdir=args.ckpt+"_tb/",

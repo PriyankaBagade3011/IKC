@@ -1,0 +1,21 @@
+python train.py --train ../data/DIV2K/DIV2K_train_HR/\
+ --test ../data/DIV2K/DIV2K_valid_HR/ \
+--train_kernel kernels/train/kernel_scale4_iso_dim10.pth \
+--test_kernel kernels/test_2/kernel_scale4_iso_dim10.pth \
+--lr 0.0001 \
+--lr_decay 0.5 \
+--lr_min 0.0000001 \
+--lr_scheduler cosine \
+--ckpt ckpt/sftmd/191020_0_x4_cosine_res_every_20k_lr_1e-4_1e-7_no_gradclip_bs16_nf96.pth \
+--loss l2 \
+--gpu 1 \
+--validation_interval 500 \
+--num_step 500000 \
+--metric psnr \
+--use_flickr \
+--use_set5 \
+--use_urban100 \
+--scale 4 \
+--batch_size 16 \
+--nf 96 \
+--resume

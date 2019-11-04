@@ -9,25 +9,14 @@ from torch.nn import init
 from torchvision.models import resnet18
 
 class Predictor(nn.Module):
-    def __init__(self, pca, in_nc=3, nf=64, code_len=10, use_bias=True, kernel_size=21):
+    def __init__(self, pca, in_nc=3, nf=64, code_len=10, use_bias=True, kernel_size=21, original=False):
         super(Predictor, self).__init__()
         self.pca = pca
         self.register_buffer("mean_", torch.tensor(pca.mean_, dtype=torch.float32))
         self.register_buffer("components_", torch.tensor(pca.components_, dtype=torch.float32))
         self.code_len = code_len
         self.kernel_size = kernel_size
-
-        # self.ConvNet = nn.Sequential(*[
-        #     nn.Conv2d(in_nc, nf, kernel_size=5, stride=1, padding=2),
-        #     nn.LeakyReLU(0.2, True),
-        #     nn.Conv2d(nf, nf, kernel_size=5, stride=1, padding=2, bias=use_bias),
-        #     nn.BatchNorm2d(nf),
-        #     nn.Conv2d(nf, nf, kernel_size=5, stride=2, padding=2, bias=use_bias),
-        #     nn.LeakyReLU(0.2, True),
-        #     nn.Conv2d(nf, nf, kernel_size=5, stride=1, padding=2, bias=use_bias),
-        #     nn.BatchNorm2d(nf),
-        #     nn.Conv2d(nf, code_len, kernel_size=5, stride=1, padding=2, bias=use_bias),
-        # ])
+        self.original = original #original implementation : which returns reducted codes.
 
         self.ConvNet = nn.Sequential(*[
             nn.Conv2d(in_nc, nf, kernel_size=5, stride=1, padding=2),
@@ -51,7 +40,9 @@ class Predictor(nn.Module):
         conv = self.ConvNet(input)
         flat = self.globalPooling(conv)
         flat = flat.view(flat.size()[:2]) # torch size: [B, code_len]
-        
+        if self.original:
+            return flat
+
         batch_mean = self.mean_.expand(flat.shape[0], self.kernel_size*self.kernel_size)
         recon = torch.matmul(flat, self.components_) + batch_mean
         recon = F.softmax(recon, dim=-1)

@@ -24,6 +24,7 @@ import cv2
 
 from network.sftmd import SFTMD, Predictor, Corrector
 from common import tensor2img, get_datasets
+from radam import RAdam
 
 args = PinkBlack.io.setup(trace=False, default_args=dict(
     ckpt="ckpt/sftmd/sftmd.pth",
@@ -40,6 +41,7 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     lr_decay=0.5,
     lr_min=1e-7,
     lr_scheduler="cosine", # 또는 'plateau' 또는 'no'
+    optimizer='adam',
     loss="l2",
     metric="psnr",
     resume=False,
@@ -51,6 +53,7 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     use_urban100=False,
     nf=64,
     patch_size=144,
+    use_noise=False,
     ))
 
 PinkBlack.io.set_seeds(args.seed)
@@ -124,14 +127,17 @@ elif args.mode == "PREDICTOR":
 else:
     raise ValueError(f"network ?? {args.mode}")
 
-optimizer = optim.Adam(filter(lambda x: x.requires_grad, net.parameters()), lr=args.lr)
+if args.optimizer == "radam":
+    optimizer = RAdam(filter(lambda x: x.requires_grad, net.parameters()), lr=args.lr)
+else:
+    optimizer = optim.Adam(filter(lambda x: x.requires_grad, net.parameters()), lr=args.lr)
 
 if args.lr_scheduler == "cosine":
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=40, eta_min=args.lr_min) # 2만번에 한 번 restart
 elif args.lr_scheduler == "plateau":
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=5, factor=args.lr_decay)
 elif args.lr_scheduler == "multi":
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, [(x+1) * 50000 // args.validation_interval for x in range(10)], gamma=args.lr_decay)
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, [(x+1) * 40000 // args.validation_interval for x in range(10)], gamma=args.lr_decay)
 elif args.lr_scheduler == "no":
     scheduler = None
 else:
@@ -176,7 +182,7 @@ if args.mode == "SFTMD":
             img = tensor2img(cat.detach())
             
             lr_img = tensor2img(lr.detach())
-            lr_img = cv2.resize(lr_img, (args.patch_size, args.batch_size * 144), interpolation=cv2.INTER_NEAREST)
+            lr_img = cv2.resize(lr_img, (args.patch_size, args.batch_size * args.patch_size), interpolation=cv2.INTER_CUBIC)
 
             img = np.concatenate((lr_img, img), axis=1)
             
