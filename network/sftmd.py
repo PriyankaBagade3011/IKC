@@ -35,23 +35,19 @@ class Predictor(nn.Module):
 
         self.globalPooling = nn.AdaptiveAvgPool2d((1,1))
 
-    def forward(self, bd, recon_kernel=True):
+    def forward(self, bd, recon_kernel=False):
         input = bd['LR']
         conv = self.ConvNet(input)
         flat = self.globalPooling(conv)
         flat = flat.view(flat.size()[:2]) # torch size: [B, code_len]
-        if self.original:
+        if self.original or not recon_kernel:
             return flat
 
-        batch_mean = self.mean_.expand(flat.shape[0], self.kernel_size*self.kernel_size)
-        recon = torch.matmul(flat, self.components_) + batch_mean
-        recon = F.softmax(recon, dim=-1)
         if recon_kernel:
+            recon = self.get_recon(flat)
             return recon
         else:
-            recon = recon - batch_mean
-            code = torch.matmul(recon, self.components_.t())
-            return code
+            return flat
         
 
 class Corrector(nn.Module):
@@ -92,7 +88,7 @@ class Corrector(nn.Module):
 
         self.nf = nf
         self.globalPooling = nn.AdaptiveAvgPool2d([1, 1])
-        self.res = True
+        self.res = False
 
     def forward(self, bd):
         input = bd['SR']
@@ -184,12 +180,6 @@ class SFTMD(nn.Module):
 
         self.conv_output = nn.Conv2d(in_channels=nf, out_channels=out_nc, kernel_size=9, stride=1, padding=4, bias=True)
 
-        # for m in self.modules():
-        #     if isinstance(m, nn.Conv2d):
-        #         init.kaiming_uniform_(m.weight)
-        #         m.bias.data.fill_(0)
-
-
     def forward(self, input_dict):
         input = input_dict['LR']
         ker_code = input_dict['k_reduced']
@@ -208,4 +198,3 @@ class SFTMD(nn.Module):
         out = self.conv_output(fea)
         
         return out
-        # return torch.clamp(out, min=self.min, max=self.max)

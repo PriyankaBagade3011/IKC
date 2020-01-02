@@ -11,7 +11,9 @@ from sklearn.decomposition import PCA
 default_augmentations = iaa.Sequential([
             iaa.Fliplr(0.5),
             iaa.Flipud(0.5), 
-            iaa.Rot90([0, 1, 2, 3])
+            iaa.Rot90([0, 1, 2, 3]),
+            # iaa.Sometimes(0.3, iaa.JpegCompression([0, 95])),
+            # iaa.Sometimes(0.3, iaa.AdditiveGaussianNoise(scale=(0.03*255, 0.1*255))),
         ])
 
 default_transforms = transforms.ToTensor()
@@ -26,21 +28,14 @@ class KernelImagePair(Dataset):
                  transforms:object,
                  seed=0,
                  patch_size=(144, 144),
-                 train=True, noise=False, demo=False):
+                 train=True, noise=False, cubic=False, interpolation="nearest", downsample_on_pipe=True):
         super(KernelImagePair, self).__init__()
         self._kernel_dict = torch.load(kernel_pickle)
         
-        if True:
-            self.kernels = self._kernel_dict['kernels']  # N x (21*21) 2d
-            self.kernel_size = (KERNEL_SIZE, KERNEL_SIZE)  # (21, 21)
-            self.k_reduced = self._kernel_dict['k_reduced']  # N x 21  2d
-            self.stddevs = self._kernel_dict['stddevs']  # N standard deviations
-        else:
-            # Kernel 고정하기
-            self.kernels = self._kernel_dict['kernels'][:1]  # N x (21*21) 2d
-            self.kernel_size = (KERNEL_SIZE, KERNEL_SIZE)  # (21, 21)
-            self.k_reduced = self._kernel_dict['k_reduced'][:1]  # N x 21  2d
-            self.stddevs = self._kernel_dict['stddevs'][:1]  # N standard deviations
+        self.kernels = self._kernel_dict['kernels']  # N x (21*21) 2d
+        self.kernel_size = (KERNEL_SIZE, KERNEL_SIZE)  # (21, 21)
+        self.k_reduced = self._kernel_dict['k_reduced']  # N x 21  2d
+        self.stddevs = self._kernel_dict['stddevs']  # N standard deviations
 
         self.pca = self._kernel_dict['pca']  # PCA object (sklearn.decomposition)
         
@@ -52,13 +47,19 @@ class KernelImagePair(Dataset):
         self.seed = seed
         self.patch_size = patch_size
         self.train=train
-        self.demo = demo
+        self.need_cubic = cubic
+        self.downsample_on_pipe = downsample_on_pipe
+        
+        if interpolation == "nearest":
+            self.inter = cv2.INTER_NEAREST
+        elif interpolation == "cubic":
+            self.inter = cv2.INTER_CUBIC
 
         self.random = np.random.RandomState(seed)
         self.noise = None
         if noise:
             self.noise = iaa.AdditiveGaussianNoise(scale=(0.03*255, 0.1*255))
-
+            
     def __getitem__(self, idx) -> dict:
         img = self.imgs[idx]
         img = cv2.imread(img, cv2.IMREAD_COLOR)
@@ -83,7 +84,10 @@ class KernelImagePair(Dataset):
         kernel_idx = self.random.randint(len(self.kernels))
         stddev = self.stddevs[kernel_idx]
         gaussian_kernel = self.kernels[kernel_idx].reshape(KERNEL_SIZE, KERNEL_SIZE).astype(np.float32)
-        img_blur = cv2.filter2D(img_patch, ddepth=-1, kernel=gaussian_kernel)
+        if self.downsample_on_pipe:
+            img_blur = cv2.filter2D(img_patch, ddepth=-1, kernel=gaussian_kernel)
+        else:
+            img_blur = img_patch
         k_reduced = self.k_reduced[kernel_idx].astype(np.float32)
 
         if self.train:            
@@ -92,12 +96,15 @@ class KernelImagePair(Dataset):
             img_blur = img_blur[half[0] : -half[0], half[1]:-half[1]]
             img = img[half[0] : -half[0], half[1]:-half[1]]
             img_lr = cv2.resize(img_blur, 
-                                (self.patch_size[0]//self.scale, self.patch_size[1]//self.scale), cv2.INTER_CUBIC)
+                                (self.patch_size[0]//self.scale, self.patch_size[1]//self.scale), self.inter)
             if self.noise is not None:
                 img_lr = self.noise.augment_image(img_lr)
-        else:
+        elif self.downsample_on_pipe:
             img_lr = cv2.resize(img_blur, 
-                    (img.shape[1]//self.scale, img.shape[0]//self.scale), cv2.INTER_CUBIC)
+                    (img.shape[1]//self.scale, img.shape[0]//self.scale), self.inter)
+        else:
+            img_lr = img_blur
+            img = cv2.imread(self.imgs[idx].replace("/lr/", "/hr/"))
 
         if self.transforms is not None:
             if self.train:
@@ -106,7 +113,7 @@ class KernelImagePair(Dataset):
                     img_lr = np.ascontiguousarray(img_lr)
                 if not img.flags['C_CONTIGUOUS']:
                     img = np.ascontiguousarray(img)
-            if self.demo:
+            if self.need_cubic:
                 # demo 상황일 때 cubic resize된 샘플도 추가
                 w, h = img.shape[:2]
                 img_cubic = cv2.resize(img_lr, (h, w), cv2.INTER_CUBIC)
@@ -123,7 +130,7 @@ class KernelImagePair(Dataset):
                     stddev=stddev,
                     )
         
-        if self.demo:
+        if self.need_cubic:
             re_dict['lr_cubic'] = img_cubic
         
         return re_dict

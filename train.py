@@ -21,6 +21,7 @@ import os, glob
 import numpy as np
 from PIL import Image
 import cv2
+import matplotlib.pyplot as plt
 
 from network.sftmd import SFTMD, Predictor, Corrector
 from common import tensor2img, get_datasets
@@ -54,6 +55,10 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     nf=64,
     patch_size=144,
     use_noise=False,
+    valid_rate=0.1,
+    inter="nearest",
+    augment="default",
+    kernel_dim=10,
     ))
 
 PinkBlack.io.set_seeds(args.seed)
@@ -93,8 +98,8 @@ if args.mode == "SFTMD":
 elif args.mode == "PREDICTOR":
     def criterion(output, bd):
         k_estimated = output
-        k_gt = bd['k'].view(bd['k'].shape[0], -1)
-        # k_reduced = bd['k']
+        # k_gt = bd['k'].view(bd['k'].shape[0], -1)
+        k_gt = bd['k_reduced']
         return loss(k_estimated, k_gt)
 else:
     raise NotImplementedError
@@ -121,9 +126,9 @@ else:
 # ------------------------------------------------------------- 
 
 if args.mode == "SFTMD":
-    net = SFTMD(input_para=10, scale=args.scale, nf=args.nf).cuda()
+    net = SFTMD(input_para=args.kernel_dim, scale=args.scale, nf=args.nf).cuda()
 elif args.mode == "PREDICTOR":
-    net = Predictor(datasets['train_dataset'].pca).cuda()
+    net = Predictor(datasets['train_dataset'].pca, code_len=args.kernel_dim).cuda()
 else:
     raise ValueError(f"network ?? {args.mode}")
 
@@ -187,13 +192,45 @@ if args.mode == "SFTMD":
             img = np.concatenate((lr_img, img), axis=1)
             
             Image.fromarray(img).save(trainer.ckpt + f"_result_imgs/{trainer.config['step']:08d}.png")
-    trainer.register_callback(validation_callback)
+    # trainer.register_callback(validation_callback)
     
 elif args.mode == "PREDICTOR":
-    pass
+    import matplotlib
+    matplotlib.use("Agg")
+    os.makedirs(args.ckpt + "_result_imgs/", exist_ok=True)
 
+    mean_ = net.mean_
+    components_ = net.components_
+    def get_recon(flat):
+        batch_mean = mean_.expand(flat.shape[0], 441)
+        recon = torch.matmul(flat, components_) + batch_mean
+        return recon
     
+    def validation_callback():
+        # To save result gt kernel - es kernel
+        with torch.no_grad(): 
+            bd = next(iter(valid_dl))
+            for k,v in bd.items():
+                bd[k] = v.cuda()    
+            
+            estimated = net(bd)
+            estimated_recon = get_recon(estimated)
+            gt_recon = get_recon(bd['k_reduced'])
 
+            fig = plt.figure()
+            plt.imshow(estimated_recon[0].view(21, 21).cpu().numpy(), cmap="gray")
+            plt.savefig(trainer.ckpt + f"_result_imgs/{trainer.config['step']:08d}_es.png")
+            # plt.savefig(trainer.ckpt + f"_result_imgs/_es.png")
+            plt.close(fig)
+
+            fig = plt.figure()
+            plt.imshow(gt_recon[0].view(21, 21).cpu().numpy(), cmap="gray")
+            plt.savefig(trainer.ckpt + f"_result_imgs/{trainer.config['step']:08d}_gt.png")
+            # plt.savefig(trainer.ckpt + f"_result_imgs/_gt.png")
+            plt.close(fig)
+
+    # trainer.register_callback(validation_callback)
+    
 if args.resume:
     trainer.load(args.ckpt)
 

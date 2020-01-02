@@ -18,6 +18,5 @@ python train.py --train ../data/DIV2K/DIV2K_train_HR/\
 --use_urban100 \
 --scale 4 \
 --batch_size 16 \
---nf 128 \
 --patch_size 256 \
 --seed 960116 

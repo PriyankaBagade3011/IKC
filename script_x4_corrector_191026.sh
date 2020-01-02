@@ -7,10 +7,10 @@ python train_corrector.py --train ../data/DIV2K/DIV2K_train_HR/\
 --lr_min 0.0000001 \
 --lr_scheduler no \
 --sftmd ckpt/sftmd/191022_0_x4_mutli_lr_1e-4_bs16.pth \
---predictor ckpt/predictor/191022_0_x4_lr_1e-4_bs16_patch256.pth \
---ckpt ckpt/corrector/191022_0_x4___191022_0_x4_191026.pth \
+--predictor ckpt/predictor/191105_0_x4_lr_1e-4_bs16_patch256.pth-2000 \
+--ckpt ckpt/corrector/191022_0_x4___191105_0_x4_191105.pth \
 --loss l2 \
---gpu 1 \
+--gpu 0 \
 --validation_interval 500 \
 --num_step 500000 \
 --metric psnr \
@@ -20,4 +20,5 @@ python train_corrector.py --train ../data/DIV2K/DIV2K_train_HR/\
 --scale 4 \
 --batch_size 16 \
 --nf 64 \
---patch_size 256
+--patch_size 256 \
+

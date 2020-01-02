@@ -37,7 +37,7 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     lr=0.0001,
     lr_decay=0.5,
     lr_min=1e-7,
-    lr_scheduler="no", # 또는 'plateau' 또는 'no'
+    lr_scheduler="no", # 또는 'multi' 또는 'no'
     optimizer='adam',
     loss="l2",
     metric="psnr",
@@ -49,6 +49,10 @@ args = PinkBlack.io.setup(trace=False, default_args=dict(
     use_urban100=False,
     patch_size=144,
     use_noise=False,
+    valid_rate=0.1,
+    inter='nearest',
+    augment="default",
+    kernel_dim=10,
     ))
 PinkBlack.io.set_seeds(args.seed)
 
@@ -106,14 +110,14 @@ else:
     raise NotImplementedError
 
 
-sftmd = SFTMD(nf=args.nf, scale=args.scale).cuda()
+sftmd = SFTMD(nf=args.nf, scale=args.scale, input_para=args.kernel_dim).cuda()
 sftmd.load_state_dict(torch.load(args.sftmd))
 sftmd.eval()
-predictor = Predictor(datasets['train_dataset'].pca).cuda()
+predictor = Predictor(datasets['train_dataset'].pca, code_len=args.kernel_dim).cuda()
 predictor.load_state_dict(torch.load(args.predictor))
 predictor.eval() 
 
-corrector = Corrector(nf=args.nf).cuda()
+corrector = Corrector(nf=args.nf, code_len=args.kernel_dim).cuda()
 
 if args.optimizer == "radam":
     optimizer = RAdam(filter(lambda x: x.requires_grad, corrector.parameters()), lr=args.lr)
