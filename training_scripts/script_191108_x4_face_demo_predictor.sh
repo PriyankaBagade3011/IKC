@@ -1,0 +1,22 @@
+python train.py --train ../../ffhq-dataset/data/images1024x1024/ \
+ --test ../../ffhq-dataset/data/images1024x1024_test/ \
+--train_kernel kernels/train/kernel_scale4_iso_dim10.pth \
+--test_kernel kernels/test_2/kernel_scale4_iso_dim10.pth \
+--lr 0.0001 \
+--lr_decay 0.5 \
+--lr_min 0.0000001 \
+--lr_scheduler multi \
+--optimizer radam \
+--mode PREDICTOR \
+--ckpt demo_face/ckpt/predictor/191108_x4_multi_bs16_cubic_patch256_radam.pth \
+--loss l2 \
+--gpu 0 \
+--validation_interval 500 \
+--num_step 500000 \
+--metric l2 \
+--use_set5 \
+--scale 4 \
+--batch_size 16 \
+--patch_size 256 \
+--seed 960116 \
+--valid_rate 0.01

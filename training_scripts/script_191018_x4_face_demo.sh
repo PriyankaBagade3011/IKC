@@ -1,0 +1,19 @@
+python train.py --train ../../ffhq-dataset/data/images1024x1024/ \
+ --test ../../ffhq-dataset/data/images1024x1024_test/ \
+--train_kernel kernels/train/kernel_scale4_iso_dim10.pth \
+--test_kernel kernels/test_2/kernel_scale4_iso_dim10.pth \
+--lr 0.0002 \
+--lr_decay 0.5 \
+--lr_min 0.0000001 \
+--lr_scheduler cosine \
+--ckpt demo_face/ckpt/sftmd/191028_x4_cosine_bs16_nf128_noise_cubic_patch256_2.pth \
+--loss l1 \
+--gpu 0 \
+--validation_interval 1000 \
+--num_step 500000 \
+--metric psnr \
+--use_set5 \
+--scale 4 \
+--batch_size 16 \
+--nf 128 \
+--patch_size 256
