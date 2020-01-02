@@ -22,4 +22,4 @@
 
 | LR   | BICUBIC | EDSR | IKC
 | --- | --- | --- | --- |
-| ![lr](test_imgs/real/chip_lr_original.png) | | | |
+| ![lr](test_imgs/real/chip_clr_original.png) | ![cubic](test_imgs/real/chip_clr.png) | ![edsr](test_imgs/real/chip_edsr.png) | ![cubic](test_imgs/real/chip_csr_07.png) |
